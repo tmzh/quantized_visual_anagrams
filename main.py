@@ -1,5 +1,6 @@
 import argparse
 from pathlib import Path
+from itertools import chain
 
 import torch
 import gc
@@ -45,8 +46,8 @@ def generate_and_save_embeds(embeds_dir, prompt):
         "DeepFloyd/IF-I-M-v1.0",
         subfolder="text_encoder",
         device_map="auto",
-        load_in_8bit=True,
-        variant="8bit"
+        variant="fp16",
+        torch_dtype=torch.float16,
     )
 
     pipe = DiffusionPipeline.from_pretrained(
@@ -86,16 +87,15 @@ def get_stages():
 if __name__ == "__main__":
     # Parse args
     parser = argparse.ArgumentParser()
-    parser.add_argument("--name", required=True, type=str)
     parser.add_argument("--save_dir", type=str, default='results', help='Location to samples and metadata')
     parser.add_argument("--embeds_dir", type=str, default='embeds', help='Location to retrieve embeds from')
     parser.add_argument("--prompts", required=True, type=str, nargs='+',
                         help='Prompts to use, corresponding to each view.')
-    parser.add_argument("--views", required=True, type=str, nargs='+',
+    parser.add_argument("--views", required=True, type=str, 
                         help='Name of views to use. See `get_views` in `views.py`.')
     parser.add_argument("--style", default='', type=str, help='Optional string to prepend prompt with')
-    parser.add_argument("--num_inference_steps", type=int, default=100)
-    parser.add_argument("--num_samples", type=int, default=100)
+    parser.add_argument("--num_inference_steps", type=int, default=40)
+    parser.add_argument("--num_samples", type=int, default=10)
     parser.add_argument("--reduction", type=str, default='mean')
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--guidance_scale", type=float, default=7.0)
@@ -107,15 +107,18 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    stop_words = stopwords = ['an', 'a', 'of', 'the' , 'in', 'on']
+    name = '.'.join(w for w in chain(*[p.split(' ') for p in [args.views, args.style] + args.prompts]) if w not in stopwords)
+
     # Create missing dirs
-    save_dir = Path(args.save_dir) / args.name
+    save_dir = Path(args.save_dir) / name
     save_dir.mkdir(exist_ok=True, parents=True)
 
     embeds_dir = Path(args.embeds_dir) 
     embeds_dir.mkdir(exist_ok=True, parents=True)
 
     # Get views
-    views = get_views(args.views)
+    views = get_views(['identity', args.views])
 
     # Save metadata
     save_metadata(views, args, save_dir)
@@ -129,8 +132,10 @@ if __name__ == "__main__":
     # Sample illusions
     for i in range(args.num_samples):
         # Admin stuff
-        generator = torch.manual_seed(args.seed + i)
-        sample_dir = save_dir / f'{i:04}'
+        # generator = torch.manual_seed(args.seed + i)
+        generator = torch.Generator()
+        seed = generator.seed()
+        sample_dir = save_dir / f'{seed:016}'
         sample_dir.mkdir(exist_ok=True, parents=True)
 
         # Sample 64x64 image
